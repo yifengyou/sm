@@ -74,4 +74,4 @@ TLCP 场景：Tongsuo（nginx/Tengine 集成、CLI 完整）。应用层算法�
 不能用本地 `time()` 或数据库时间字段自证时间。合规做法：接入选入认证目录的可信时间戳服务（TSA，GM/T 0033 体系），本地算 SM3 摘要送签，归档令牌并校验证书链与摘要一致性。见消息语法章时间戳一节。
 
 **Q22：手册里的算法流程和测试向量，有办法一键自测吗？**
-仓库附带 `scripts/verify_test_vectors.py`（纯 Python 标准库、零依赖）：覆盖 SM3/SM4/ZUC 官方 KAT、SM4 全部 32 个轮密钥、EIA3 的 MAC 与 IV 构造、SM2 曲线自检及签名/加密数值示例全链路。`python3 scripts/verify_test_vectors.py` 全绿即通过。
+仓库附带 `scripts/verify_test_vectors.py`（纯 Python 标准库、零依赖）：覆盖 SM3/SM4/ZUC 官方 KAT、SM4 全部 32 个轮密钥、EIA3 的 MAC 与 IV 构造、RFC 8998 的 SM4-GCM/CCM 向量、SM2 曲线自检与签名/加密数值示例全链路、SM9 标准附录 A~D 的全部非配对分量（主公钥/H1/用户私钥/用户公钥/C₁/C₂/C₃），共 42 项检查。`python3 scripts/verify_test_vectors.py` 全绿即通过。

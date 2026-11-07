@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """国密技术知识手册——测试向量一键复核脚本
 
-覆盖范围（对应手册第二部分各章）：
+覆盖范围（对应手册第二部分各章 + RFC 8998）：
   * SM3：GB/T 32905 附录 A 全部 KAT（"abc" / "abcd"×64）
   * SM4：GB/T 32907 附录 A KAT + 全部 32 个轮密钥 + 解密对合性
   * ZUC：GM/T 0001.1 附录 C 官方向量（全零 / 全 FF）
@@ -9,6 +9,11 @@
   * SM2：sm2p256v1 曲线自检（在曲线上 / a=p−3 / [n]G=O）、
           手册 3.4 节签名示例全链路（P_A/Z_A/e/x₁/r/s）、
           手册 5.4 节加密示例全链路（C₁/C₂/C₃）
+  * SM4-GCM/CCM：RFC 8998 附录 A 测试向量（含 GCM/CCM 模式的独立实现）
+  * SM9：GB/T 38635 曲线自检（P₁/P₂ 在曲线上、[n]P=O），附录 A 签名示例与
+          附录 C/D 加密示例的全部非配对分量（主公钥、H1、用户私钥/公钥、
+          C₁ 点、C₂/C₃ 公式）、附录 B 密钥交换的 R_A——配对相关分量
+          （w/g^r/KDF 密钥）依赖双线性对，以标准文本为准
 
 用法：python3 scripts/verify_test_vectors.py    （全部通过退出码 0，否则 1）
 依赖：仅 Python 标准库（3.8+）。
@@ -151,6 +156,11 @@ def sm4_crypt(block, rk):
     for i in range(32):
         X.append(X[i] ^ sm4_l(sm4_tau(X[i + 1] ^ X[i + 2] ^ X[i + 3] ^ rk[i])))
     return struct.pack(">4I", X[35], X[34], X[33], X[32])
+
+
+def sm4_enc(key16, block16):
+    """单分组加密 E(K, B)：GCM/CCM 模式的底层调用"""
+    return sm4_crypt(block16, sm4_key_schedule(key16))
 
 
 # ----------------------------------------------------------------------
@@ -430,6 +440,229 @@ def main():
     c3 = sm3(i2b(x2, 32) + b"encryption standard" + i2b(y2, 32))
     check("C₃ = SM3(x₂‖M‖y₂)", c3,
           bytes.fromhex("72bf3d0ba986804c18bedddd822c750061de9ec8dd1324f542377e55d2dab533"))
+
+    # ------------------------------------------------------------------
+    # SM4-GCM / SM4-CCM（RFC 8998 附录 A）
+    # ------------------------------------------------------------------
+    print("\n== SM4-GCM / SM4-CCM（RFC 8998 附录 A） ==")
+
+    def gcm_mult(x, y):
+        R = 0xE1 << 120
+        z, v = 0, y
+        for i in range(127, -1, -1):
+            if (x >> i) & 1:
+                z ^= v
+            v = (v >> 1) ^ R if v & 1 else v >> 1
+        return z
+
+    def ghash(h, a, c):
+        pad = lambda b: b + b"\x00" * ((16 - len(b) % 16) % 16)
+        data = pad(a) + pad(c) + struct.pack(">QQ", len(a) * 8, len(c) * 8)
+        y = 0
+        for i in range(0, len(data), 16):
+            y = gcm_mult(y ^ int.from_bytes(data[i:i + 16], "big"), h)
+        return y
+
+    def gcm_encrypt(key, iv, pt, aad):
+        h = int.from_bytes(sm4_enc(key, b"\x00" * 16), "big")
+        j0 = iv + b"\x00\x00\x00\x01"            # 96 位 IV 的 J0
+        ct, ctr = b"", int.from_bytes(j0[12:], "big")
+        for i in range(0, len(pt), 16):
+            ctr = (ctr + 1) % 2**32               # 加密计数块自 inc32(J0) 起
+            ks = sm4_enc(key, j0[:12] + ctr.to_bytes(4, "big"))
+            ct += bytes(p ^ k for p, k in zip(pt[i:i + 16], ks))
+        tag = int.from_bytes(sm4_enc(key, j0), "big") ^ ghash(h, aad, ct)
+        return ct, tag.to_bytes(16, "big")
+
+    def ccm_encrypt(key, nonce, pt, aad, tlen=16, q=3):
+        """RFC 3610 / SP 800-38C，参数按 RFC 8998：n=12、t=16、q=3"""
+        flags0 = (0x40 if aad else 0) | (((tlen - 2) // 2) << 3) | (q - 1)
+        b0 = bytes([flags0]) + nonce + len(pt).to_bytes(q, "big")
+        x = sm4_enc(key, b0)
+        if aad:
+            alen = len(aad)
+            ab = (alen.to_bytes(2, "big") if alen < 0xFF00
+                  else b"\xFF\xFE" + alen.to_bytes(8, "big")) + aad
+            ab += b"\x00" * ((16 - len(ab) % 16) % 16)
+            for i in range(0, len(ab), 16):
+                x = sm4_enc(key, bytes(u ^ v for u, v in zip(x, ab[i:i + 16])))
+        pp = pt + b"\x00" * ((16 - len(pt) % 16) % 16)
+        for i in range(0, len(pp), 16):
+            x = sm4_enc(key, bytes(u ^ v for u, v in zip(x, pp[i:i + 16])))
+        ctr = lambda i: bytes([q - 1]) + nonce + i.to_bytes(q, "big")
+        ct, k = b"", 1
+        for i in range(0, len(pt), 16):
+            ks = sm4_enc(key, ctr(k)); k += 1
+            ct += bytes(p ^ s for p, s in zip(pt[i:i + 16], ks))
+        tag = bytes(u ^ v for u, v in zip(x[:tlen], sm4_enc(key, ctr(0))))
+        return ct, tag
+
+    rk = bytes.fromhex("0123456789abcdeffedcba9876543210")
+    riv = bytes.fromhex("00001234567800000000abcd")
+    rpt = bytes.fromhex("aa" * 8 + "bb" * 8 + "cc" * 8 + "dd" * 8
+                        + "ee" * 8 + "ff" * 8 + "ee" * 8 + "aa" * 8)
+    raad = bytes.fromhex("feedfacedeadbeeffeedfacedeadbeefabaddad2")
+    ct, tag = gcm_encrypt(rk, riv, rpt, raad)
+    check("SM4-GCM 密文（RFC 8998 A.1）", ct,
+          bytes.fromhex("17f399f08c67d5ee19d0dc9969c4bb7d5fd46fd3756489069157b282bb200735"
+                        "d82710ca5c22f0ccfa7cbf93d496ac15a56834cbcf98c397b4024a2691233b8d"))
+    check("SM4-GCM 标签（RFC 8998 A.1）", tag,
+          bytes.fromhex("83de3541e4c2b58177e065a9bf7b62ec"))
+    ct2, tag2 = ccm_encrypt(rk, riv, rpt, raad)
+    check("SM4-CCM 密文（RFC 8998 A.2）", ct2,
+          bytes.fromhex("48af93501fa62adbcd414cce6034d895dda1bf8f132f042098661572e7483094"
+                        "fd12e518ce062c98acee28d95df4416bed31a2f04476c18bb40c84a74b97dc5b"))
+    check("SM4-CCM 标签（RFC 8998 A.2）", tag2,
+          bytes.fromhex("16842d4fa186f56ab33256971fa110f4"))
+
+    # ------------------------------------------------------------------
+    # SM9（GB/T 38635 附录 A/B/C/D 的全部非配对分量）
+    # ------------------------------------------------------------------
+    print("\n== SM9（GB/T 38635.2 附录 A/B/C/D，非配对分量） ==")
+    SM9_P = 0xB640000002A3A6F1D603AB4FF58EC74521F2934B1A7AEEDBE56F9B27E351457D
+    SM9_N = 0xB640000002A3A6F1D603AB4FF58EC74449F2934B18EA8BEEE56EE19CD69ECF25
+    SM9_G1 = (0x93DE051D62BF718FF5ED0704487D01D6E1E4086909DC3280E8C4E4817C66DDDD,
+              0x21FE8DDA4F21E607631065125C395BBC1C1C00CBFA6024350C464CD70A3EA616)
+    # P₂（扭曲线 E': y² = x³ + 5u 上的生成元；F_p² = F_p[u]/(u²+2)，元素记 (r, w) = r + w·u）
+    SM9_G2 = ((0x3722755292130B08D2AAB97FD34EC120EE265948D19C17ABF9B7213BAF82D65B,
+               0x85AEF3D078640C98597B6027B441A01FF1DD2C190F5E93C454806C11D8806141),
+              (0xA7CF28D519BE3DA65F3170153D278FF247EFBA98A71A08116215BBA5C999A7C7,
+               0x17509B092E845C1266BA0D262CBEE6ED0736A96FA347C8BD856DC76B84EBEB96))
+
+    def f2_add(a, b): return ((a[0] + b[0]) % SM9_P, (a[1] + b[1]) % SM9_P)
+    def f2_sub(a, b): return ((a[0] - b[0]) % SM9_P, (a[1] - b[1]) % SM9_P)
+    def f2_mul(a, b): return ((a[0] * b[0] - 2 * a[1] * b[1]) % SM9_P,
+                              (a[0] * b[1] + a[1] * b[0]) % SM9_P)
+    def f2_inv(a):
+        t = pow(a[0] * a[0] + 2 * a[1] * a[1], -1, SM9_P)
+        return ((a[0] * t) % SM9_P, (-a[1] * t) % SM9_P)
+
+    def tw_add(Pt, Qt):
+        if Pt is None: return Qt
+        if Qt is None: return Pt
+        x1, y1 = Pt; x2, y2 = Qt
+        if x1 == x2 and f2_add(y1, y2) == (0, 0): return None
+        if Pt == Qt:
+            lam = f2_mul(f2_mul((3, 0), f2_mul(x1, x1)), f2_inv(f2_mul((2, 0), y1)))
+        else:
+            lam = f2_mul(f2_sub(y2, y1), f2_inv(f2_sub(x2, x1)))
+        x3 = f2_sub(f2_sub(f2_mul(lam, lam), x1), x2)
+        y3 = f2_sub(f2_mul(lam, f2_sub(x1, x3)), y1)
+        return (x3, y3)
+
+    def tw_mul(k, Pt):
+        r = None
+        while k:
+            if k & 1: r = tw_add(r, Pt)
+            Pt = tw_add(Pt, Pt); k >>= 1
+        return r
+
+    def tw_marshal(Pt):  # 序列化：x.u ‖ x.r ‖ y.u ‖ y.r（GM 系实现惯例）
+        x, y = Pt
+        return (x[1].to_bytes(32, "big") + x[0].to_bytes(32, "big")
+                + y[1].to_bytes(32, "big") + y[0].to_bytes(32, "big"))
+
+    def sm9_add(Pt, Qt):  # G₁：y² = x³ + 5 (mod p)
+        if Pt is None: return Qt
+        if Qt is None: return Pt
+        x1, y1 = Pt; x2, y2 = Qt
+        if x1 == x2 and (y1 + y2) % SM9_P == 0: return None
+        if Pt == Qt:
+            lam = (3 * x1 * x1) * pow(2 * y1, -1, SM9_P) % SM9_P
+        else:
+            lam = (y2 - y1) * pow(x2 - x1, -1, SM9_P) % SM9_P
+        x3 = (lam * lam - x1 - x2) % SM9_P
+        return (x3, (lam * (x1 - x3) - y1) % SM9_P)
+
+    def sm9_g1_mul(k, Pt):
+        r = None
+        while k:
+            if k & 1: r = sm9_add(r, Pt)
+            Pt = sm9_add(Pt, Pt); k >>= 1
+        return r
+
+    def sm9_g1_marshal(Pt):
+        return Pt[0].to_bytes(32, "big") + Pt[1].to_bytes(32, "big")
+
+    def sm9_h1(z: bytes) -> int:
+        """GB/T 38635.1 密码函数：SM3×2 取前 40 字节，(mod (n-1)) + 1"""
+        ha = (sm3(b"\x01" + z + (1).to_bytes(4, "big"))
+              + sm3(b"\x01" + z + (2).to_bytes(4, "big")))
+        return (int.from_bytes(ha[:40], "big") % (SM9_N - 1)) + 1
+
+    check("P₁ 在 y²=x³+5 (mod p) 上", (SM9_G1[1] ** 2 - (SM9_G1[0] ** 3 + 5)) % SM9_P, 0)
+    check("[n]P₁ = O", 0 if sm9_g1_mul(SM9_N, SM9_G1) is None else 1, 0)
+    lx, ly = SM9_G2
+    check("P₂ 在 y²=x³+5u (F_p²) 上",
+          1 if f2_mul(ly, ly) == f2_add(f2_mul(f2_mul(lx, lx), lx), (0, 5)) else 0, 1)
+    check("[n]P₂ = O", 0 if tw_mul(SM9_N, SM9_G2) is None else 1, 0)
+
+    # ---- 附录 A 签名示例（Alice / "Chinese IBS standard" / hid=01） ----
+    s_mk = 0x000130E78459D78545CB54C587E02CF480CE0B66340F319F348A1D5B1F2DC5F4
+    check("Ppub-s = [s]P₂（附录 A）", tw_marshal(tw_mul(s_mk, SM9_G2)),
+          bytes.fromhex("9f64080b3084f733e48aff4b41b565011ce0711c5e392cfb0ab1b6791b94c408"
+                        "29dba116152d1f786ce843ed24a3b573414d2177386a92dd8f14d65696ea5e32"
+                        "69850938abea0112b57329f447e3a0cbad3e2fdb1a77f335e89e1408d0ef1c2"
+                        "541e00a53dda532da1a7ce027b7a46f741006e85f5cdff0730e75c05fb4e3216d"))
+    h1 = sm9_h1(b"Alice" + bytes([1]))
+    ta = s_mk * pow(s_mk + h1, -1, SM9_N) % SM9_N
+    da = sm9_g1_mul(ta, SM9_G1)
+    check("d_A = [s·(s+h₁)⁻¹]P₁（附录 A）", sm9_g1_marshal(da),
+          bytes.fromhex("a5702f05cf1315305e2d6eb64b0deb923db1a0bcf0caff90523ac8754aa69820"
+                        "78559a844411f9825c109f5ee3f52d720dd01785392a727bb1556952b2b013d3"))
+    r_sig = 0x033C8616B06704813203DFD00965022ED15975C662337AED648835DC4B1CBE
+    h_sig = 0x823C4B21E4BD2DFE1ED92C606653E996668563152FC33F55D7BFBB9BD9705ADB
+    check("S = [(r−h)]·d_A（附录 A）",
+          sm9_g1_marshal(sm9_g1_mul((r_sig - h_sig) % SM9_N, da)),
+          bytes.fromhex("73bf96923ce58b6ad0e13e9643a406d8eb98417c50ef1b29cef9adb48b6d598c"
+                        "856712f1c2e0968ab7769f42a99586aed139d5b8b3e15891827cc2aced9baa05"))
+
+    # ---- 附录 C/D 加密示例（Bob / "Chinese IBE standard" / hid=03） ----
+    ke_mk = 0x0001EDEE3778F441F8DEA3D9FA0ACC4E07EE36C93F9A08618AF4AD85CEDE1C22
+    ppub_e = sm9_g1_mul(ke_mk, SM9_G1)
+    check("Ppub-e = [ke]P₁（附录 C/D）", sm9_g1_marshal(ppub_e),
+          bytes.fromhex("787ed7b8a51f3ab84e0a66003f32da5c720b17eca7137d39abc66e3c80a892ff"
+                        "769de61791e5adc4b9ff85a31354900b202871279a8c49dc3f220f644c57a7b1"))
+    hb = sm9_h1(b"Bob" + bytes([3]))
+    tb = ke_mk * pow(ke_mk + hb, -1, SM9_N) % SM9_N
+    check("de_B = [ke·(ke+h_B)⁻¹]P₂（附录 C/D）", tw_marshal(tw_mul(tb, SM9_G2)),
+          bytes.fromhex("94736acd2c8c8796cc4785e938301a139a059d3537b6414140b2d31eecf4168"
+                        "3115bae85f5d8bc6c3dbd9e5342979acccf3c2f4f28420b1cb4f8c0b59a19b15"
+                        "87aa5e47570da7600cd760a0cf7beaf71c447f3844753fe74fa7ba92ca7d3b55"
+                        "f27538a62e7f7bfb51dce08704796d94c9d56734f119ea44732b50e31cdeb75c1"))
+    qb = sm9_add(sm9_g1_mul(hb, SM9_G1), ppub_e)
+    check("Q_B = [h_B]P₁ + Ppub-e（附录 C/D）", sm9_g1_marshal(qb),
+          bytes.fromhex("709d165808b0a43e2574e203fa885abcbab16a240c4c1916552e7c43d09763b8"
+                        "693269a6be2456f43333758274786b6051ff87b7f198da4ba1a2c6e336f51fcc"))
+    r_wrap = 0x74015F8489C01EF4270456F9E6475BFB602BDE7F33FD482AB4E3684A6722
+    check("封装 C₁ = [r]Q_B（附录 C）", sm9_g1_marshal(sm9_g1_mul(r_wrap, qb)),
+          bytes.fromhex("1edee2c3f465914491de44cefb2cb434ab02c308d9dc5e2067b4fed5aaac8a0f"
+                        "1c9b4c435eca35ab83bb734174c0f78fde81a53374aff3b3602bbc5e37be9a4c"))
+    r_enc = 0xAAC0541779C8FC45E3E2CB25C12B5D2576B2129AE8BB5EE2CBE5EC9E785C
+    check("加密 C₁ = [r]Q_B（附录 D）", sm9_g1_marshal(sm9_g1_mul(r_enc, qb)),
+          bytes.fromhex("2445471164490618e1ee20528ff1d545b0f14c8bcaa44544f03dab5dac07d8ff"
+                        "42ffca97d57cddc05ea405f2e586feb3a6930715532b8000759f13059ed59ac0"))
+    k_enc = bytes.fromhex("58373260f067ec48667c21c144f8bc33cd3049788651ffd5f738003e51df311"
+                          "74d0e4e402fd87f4581b612f74259db574f67ece6")  # KDF(C₁‖w‖ID_B, 52)
+    m_enc = b"Chinese IBE standard"
+    exp_ct = bytes.fromhex(
+        "2445471164490618e1ee20528ff1d545b0f14c8bcaa44544f03dab5dac07d8ff"
+        "42ffca97d57cddc05ea405f2e586feb3a6930715532b8000759f13059ed59ac0b"
+        "a672387bcd6de5016a158a52bb2e7fc429197bcab70b25afee37a2b9db9f36"
+        "71b5f5b0e951489682f3e64e1378cdd5da9513b1c")
+    c2 = bytes(m ^ k for m, k in zip(m_enc, k_enc))
+    check("C₂ = M ⊕ K[0:klen]（附录 D）", c2, exp_ct[96:])
+    check("C₃ = SM3(C₂‖K[klen:])（附录 D）", sm3(c2 + k_enc[len(m_enc):]), exp_ct[64:96])
+
+    # ---- 附录 B 密钥交换：发起方临时值 ----
+    kex_mk = 0x0002E65B0762D042F51F0D23542B13ED8CFA2E9A0E7206361E013A283905E31F
+    ppub_kex = sm9_g1_mul(kex_mk, SM9_G1)
+    qb2 = sm9_add(sm9_g1_mul(sm9_h1(b"Bob" + bytes([2])), SM9_G1), ppub_kex)
+    r_a = 0x5879DD1D51E175946F23B1B41E93BA31C584AE59A426EC1046A4D03B06C8
+    check("R_A = [r_A]·([h_B]P₁+Ppub-e)（附录 B）",
+          b"\x04" + sm9_g1_marshal(sm9_g1_mul(r_a, qb2)),
+          bytes.fromhex("047cba5b19069ee66aa79d490413d11846b9ba76dd22567f809cf23b6d964bb2"
+                        "65a9760c99cb6f706343fed05637085864958d6c90902aba7d405fbedf7b781599"))
 
     total = len(RESULTS)
     passed = sum(1 for _, ok in RESULTS if ok)

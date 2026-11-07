@@ -49,3 +49,5 @@
 * [附录 B：常见问题 FAQ](docs/appendix/faq.md)
 * [附录 C：术语表](docs/appendix/glossary.md)
 
+测试向量一键复核：`python3 scripts/verify_test_vectors.py`（SM3/SM4/ZUC/EIA3 官方 KAT、RFC 8998 SM4-GCM/CCM、SM2 与 SM9 数值示例，42/42 通过）
+
