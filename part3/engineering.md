@@ -178,6 +178,22 @@ nginx 侧：Tengine 及 Tongsuo 生态通过 `ssl_sign_certificate(_key)`、`ssl
 
 SM2 的性能要点在第二部分已述（固定基点预计算、双标量乘、快速约简）。批量验签场景（网关逐请求验签）优先：HSM 批量接口、多核并行、必要时批验签算法。
 
+**实测工具速查**（性能预算清单第 2 步的落地方法）：
+
+```bash
+# OpenSSL（1.1.1+；Tongsuo 同构且另有 TLCP 相关测速目标）
+openssl speed sm3                           # SM3 吞吐
+openssl speed -evp sm4-cbc                  # SM4-CBC（务必走 EVP 路径，才有优化实现）
+openssl speed -evp sm4-gcm                  # 3.0+；新 Intel 平台 + 3.6+ 走 SM4 指令
+openssl speed -multi $(nproc) -evp sm4-gcm  # 多核汇总
+
+# SM2 公钥运算基准（吞吐与延迟分开测）——gmsm 仓库自带基准套件
+git clone https://github.com/emmansun/gmsm && cd gmsm
+go test -bench=. -benchmem ./sm2/... ./sm4/...
+```
+
+读数注意：`openssl speed` 同时输出 b/s 与 ops/s 两个口径，对照 AES 时用同一分组大小；"握手密集"负载把 SM2 签名/验签 ops/s 换算成"每核每秒握手数"，再按密码机/核数配比外推；密码机吞吐用厂商 SDF 工具压测，重点关注**并发会话下的衰减曲线**而非单连接峰值。
+
 **性能预算清单**（做国密改造前先测）：
 
 1. 记录现有算法吞吐基线（如 AES-GCM GB/s 级、ECDSA P-256 验签次数/秒）；
