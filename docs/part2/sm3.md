@@ -156,7 +156,7 @@ def sm3(msg: bytes) -> bytes:
     return struct.pack('>8I', *V)
 ```
 
-（本实现的输出已对照 GB/T 32905 附录 A 测试向量及 OpenSSL 独立实现双重复核。）
+（本实现的输出已对照 GB/T 32905 附录 A 测试向量及 OpenSSL 独立实现双重复核；仓库附带 `scripts/verify_test_vectors.py`，可一键复核本节代码。）
 
 ## 7. 标准测试向量
 

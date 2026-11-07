@@ -30,4 +30,4 @@
 * 遇到具体报错或选型疑问：先查附录 B（FAQ），再跳转到对应章节。
 * 查标准编号：附录 A（标准总索引）。
 
-> 标准文本是唯一权威来源。本手册基于公开标准（GB/T、GM/T、ISO/IEC、RFC、3GPP）整理，撰写时已用参考实现复核文中算法流程与测试向量（SM3/SM4/ZUC 与官方 KAT 及独立实现双重复核，SM2 曲线参数经程序验证，TLCP 套件编码与 OID 经 Tongsuo/OpenSSL/BouncyCastle 源码核对）；标准会修订，工程落地请以最新版官方文本与国家密码管理局公告为准。
+> 标准文本是唯一权威来源。本手册基于公开标准（GB/T、GM/T、ISO/IEC、RFC、3GPP）整理，撰写时已用参考实现复核文中算法流程与测试向量（SM3/SM4/ZUC 与官方 KAT 及独立实现双重复核，SM2 曲线参数经程序验证，TLCP 套件编码与 OID 经 Tongsuo/OpenSSL/BouncyCastle 源码核对）；标准会修订，工程落地请以最新版官方文本与国家密码管理局公告为准。仓库附带一键复核脚本 `scripts/verify_test_vectors.py`，读者可自行验证第二部分的全部 KAT 与数值示例。

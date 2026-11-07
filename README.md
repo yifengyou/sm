@@ -6,3 +6,4 @@
 
 * [手册首页](docs/README.md)——内容结构、术语约定与阅读建议
 * [总目录（SUMMARY）](docs/SUMMARY.md)——GitBook 风格目录
+* `scripts/verify_test_vectors.py`——测试向量一键复核脚本（`python3 scripts/verify_test_vectors.py`，23/23 通过）
