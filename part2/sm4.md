@@ -93,11 +93,23 @@ import struct
 M32 = 0xFFFFFFFF
 def rol(x, n): return ((x << n) | (x >> (32 - n))) & M32
 
-SBOX = bytes.fromhex(
-    "d690e9fe cce13db7 16b614c2 28fb2c05"  # ……按第 3 节表格拼满 256 字节
-    "2b679a76 2abe04c3 aa441326 49860699"
-    # ……（略，见上表）
-    "18f07dec 3adc4d20 79ee5f3e d7cb3948")
+SBOX = bytes.fromhex(                        # 256 字节，与第 3 节表格逐行一致
+    "d690e9fecce13db716b614c228fb2c05"
+    "2b679a762abe04c3aa44132649860699"
+    "9c4250f491ef987a33540b43edcfac62"
+    "e4b31ca9c908e89580df94fa758f3fa6"
+    "4707a7fcf37317ba83593c19e6854fa8"
+    "686b81b27164da8bf8eb0f4b70569d35"
+    "1e240e5e6358d1a225227c3b01217887"
+    "d40046579fd327524c3602e7a0c4c89e"
+    "eabf8ad240c738b5a3f7f2cef96115a1"
+    "e0ae5da49b341a55ad933230f58cb1e3"
+    "1df6e22e8266ca60c02923ab0d534e6f"
+    "d5db3745defd8e2f03ff6a726d6c5b51"
+    "8d1baf92bbddbc7f11d95c411f105ad8"
+    "0ac13188a5cd7bbd2d74d012b8e5b4b0"
+    "8969974a0c96777e65b9f109c56ec684"
+    "18f07dec3adc4d2079ee5f3ed7cb3948")
 FK = [0xA3B1BAC6, 0x56AA3350, 0x677D9197, 0xB27022DC]
 
 def tau(x):
