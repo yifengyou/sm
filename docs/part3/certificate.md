@@ -97,7 +97,7 @@ openssl x509 -in sign.crt -noout -text
 openssl verify -CAfile sign.crt sign.crt
 ```
 
-注意：OpenSSL 的 `-SM3` 参数使 req 采用 SM2withSM3 签名；签发双证书时把上面的流程对"加密密钥对"再走一遍（并向 CA/KMC 申请正式加密证书）。CSR（PKCS#10）结构本身无需国密化，只是签名算法换为国密。
+注意：OpenSSL 的 `-SM3` 参数使 req 采用 SM2withSM3 签名；签发双证书时把上面的流程对"加密密钥对"再走一遍（并向 CA/KMC 申请正式加密证书）。CSR（PKCS#10）结构本身无需国密化，只是签名算法换为国密。（本节命令已在 OpenSSL 3.0.x 实测通过：证书签名算法显示 `SM2-with-SM3`、曲线 OID `SM2`、自签校验 OK。）
 
 ## 6. 信任链与证书状态服务
 
