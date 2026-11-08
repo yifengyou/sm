@@ -35,6 +35,7 @@
 * [第五部分导读](part5/README.md)
 * [随机数与随机性检测](part5/random.md)
 * [密钥管理体系](part5/keymgmt.md)
+* [密码模块与产品认证](part5/module.md)
 * [消息语法与数字信封](part5/envelope.md)
 * [工作模式与 MAC 的国标体系](part5/modes.md)
 * [安全接入协议族与 WAPI](part5/vpn.md)
