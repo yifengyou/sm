@@ -33,4 +33,4 @@
 * 遇到具体报错或选型疑问：先查附录 B（FAQ），再跳转到对应章节。
 * 查标准编号：附录 A（标准总索引）。
 
-> 标准文本是唯一权威来源。本手册基于公开标准（GB/T、GM/T、ISO/IEC、RFC、3GPP）整理，撰写时已用参考实现复核文中算法流程与测试向量（SM3/SM4/ZUC 与官方 KAT 及独立实现双重复核；HMAC-SM3/HKDF-SM3 与 OpenSSL 独立实现交叉复核；CMAC-SM4 按 RFC 4493 同构构造自算；EEA3/EIA3 官方向量取自密标委英译本并程序复现；SM2 曲线参数与签名/加密/密钥交换/确定性签名示例程序验证全链路；SM9 密钥派生链及附录 A~D 全部非配对分量程序验证；SM4-GCM/CCM 与 RFC 8998 向量逐字节验证；TLCP 套件编码与 OID 经 Tongsuo/OpenSSL/BouncyCastle 源码核对）；标准会修订，工程落地请以最新版官方文本与国家密码管理局公告为准。仓库附带一键复核脚本 `scripts/verify_test_vectors.py`（76 项检查），读者可自行验证手册全部 KAT 与数值示例。
+> 标准文本是唯一权威来源。本手册基于公开标准（GB/T、GM/T、ISO/IEC、RFC、3GPP）整理，撰写时已用参考实现复核文中算法流程与测试向量（SM3/SM4/ZUC 与官方 KAT 及独立实现双重复核；HMAC-SM3/HKDF-SM3 与 OpenSSL 独立实现交叉复核；CMAC-SM4 按 RFC 4493 同构构造自算；EEA3/EIA3 官方向量取自密标委英译本并程序复现；SM2 曲线参数与签名/加密/密钥交换/确定性签名示例程序验证全链路；SM9 密钥派生链及附录 A~D 全部非配对分量程序验证，**配对驱动分量（签名 h、KEM/加密的 K）另经 gmalg 独立实现交叉复核**；SM4-GCM/CCM 与 RFC 8998 向量逐字节验证；TLCP 套件编码与 OID 经 Tongsuo/OpenSSL/BouncyCastle 源码核对）；标准会修订，工程落地请以最新版官方文本与国家密码管理局公告为准。仓库附带两个复核脚本：`scripts/verify_test_vectors.py`（76 项，纯标准库零依赖）与 `scripts/verify_sm9_pairing.py`（11 项，SM9 配对分量，依赖 gmalg），读者可自行验证手册全部 KAT 与数值示例。

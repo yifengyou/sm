@@ -273,7 +273,7 @@ go test -bench=. -benchmem ./sm2/... ./sm4/...
 
 ## 8. 测试与验证
 
-1. **KAT 自测**：每个算法跑标准向量（本手册各章均已给出，配套 `scripts/verify_test_vectors.py` 一键复核 76 项：SM3 两条、HMAC-SM3 三组、SM4 单分组+全轮密钥、CMAC-SM4 子密钥+四组消息、ZUC 两条、EEA3 官方两例、EIA3 示例 1/2、HKDF-SM3 两组、SM2 曲线自检+签名/加密/密钥交换/确定性签名示例、RFC 8998 的 SM4-GCM/CCM 向量、SM9 非配对分量）；
+1. **KAT 自测**：每个算法跑标准向量（本手册各章均已给出，配套 `scripts/verify_test_vectors.py` 一键复核 76 项：SM3 两条、HMAC-SM3 三组、SM4 单分组+全轮密钥、CMAC-SM4 子密钥+四组消息、ZUC 两条、EEA3 官方两例、EIA3 示例 1/2、HKDF-SM3 两组、SM2 曲线自检+签名/加密/密钥交换/确定性签名示例、RFC 8998 的 SM4-GCM/CCM 向量、SM9 非配对分量；另有 `scripts/verify_sm9_pairing.py` 复核 SM9 配对驱动分量 11 项——含签名 h 与 KEM/加密 K，实现 SM9 时务必跑）；
 2. **互操作矩阵**：自研实现 × 主流库（GmSSL/Tongsuo/BC/gmsm）两两对跑签名/加密/握手；
 3. **协议模糊测试**：TLCP 握手状态机过 fuzzing（畸形 ClientHello、截断消息、乱序）；
 4. **侧信道初筛**：签名/解密路径的计时方差分析（TLCCer/dudect 类工具）；

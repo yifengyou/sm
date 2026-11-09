@@ -1,13 +1,15 @@
 # TLCP 传输层密码协议
 
-TLCP（Transport Layer Cryptographic Protocol，传输层密码协议）是国密版的 TLS，标准为 **GB/T 38636-2020（前身 GM/T 0054-2018）**。它以 TLS 1.2 为骨架，全面替换密码算法（SM2/SM3/SM4）并引入国密体系最具标志性的设计——**双证书**。国密 HTTPS、国密 SSL VPN 网关、政务/金融专线网关的核心协议就是它。
+TLCP（Transport Layer Cryptographic Protocol，传输层密码协议）是国密版的 TLS，标准为 **GB/T 38636-2020**。它以 TLS 1.2 为骨架，全面替换密码算法（SM2/SM3/SM4）并引入国密体系最具标志性的设计——**双证书**。国密 HTTPS、国密 SSL VPN 网关、政务/金融专线网关的核心协议就是它。
 
 标准沿革：
 
 ```text
-GM/T 0024-2014《SSL VPN 技术规范》──► GM/T 0054-2018《传输层密码协议 TLCP》──► GB/T 38636-2020
-（各厂商 GM SSL 双证书协议的收敛统一）        （独立成标准）                        （国家标准）
+GM/T 0024-2014《SSL VPN 技术规范》（第 5/6 章的双证书 SSL 协议）──► GB/T 38636-2020《传输层密码协议 TLCP》
+（各厂商 GM SSL 双证书协议的收敛统一）                          （抽出协议、增加算法套件、直接升格国标）
 ```
+
+> **编号辨误**：网络资料常把 TLCP 的"行标版"写成 GM/T 0054-2018，这是讹传——GM/T 0054-2018 实为《信息系统密码应用基本要求》（GB/T 39786-2021 的前身，见密评章）。TLCP 没有独立的行标版，国密局标准使用指南明确"GB/T 38636 基于 GM/T 0024-2014 的协议部分修改增加算法套件而来"。引用时勿沿袭此误。
 
 另有一条"现代化路线"：**RFC 8998** 在标准 TLS 1.3 上直接叠加国密套件（单证书、AEAD、1-RTT），见本章第 8 节——两者是**并列而非替代**关系。
 
@@ -271,4 +273,4 @@ tongsuo s_client -enable_ntls -ntls -connect localhost:443
 
 ---
 
-**延伸阅读**：GB/T 38636-2020 全文（含握手报文格式与全部套件定义）；GM/T 0054-2018；RFC 8998；RFC 8446（TLS 1.3，理解 TLCP 的对照系）；Tongsuo 文档（TLCP/NTLS 实现与 wiki，含"Tengine + Tongsuo 国密使用教程"）；TencentKonaSMSuite（TLCP 的纯 Java/Android 实现与文档）。
+**延伸阅读**：GB/T 38636-2020 全文（含握手报文格式与全部套件定义）；GM/T 0024-2014（协议前身）；RFC 8998；RFC 8446（TLS 1.3，理解 TLCP 的对照系）；Tongsuo 文档（TLCP/NTLS 实现与 wiki，含"Tengine + Tongsuo 国密使用教程"）；TencentKonaSMSuite（TLCP 的纯 Java/Android 实现与文档）。
