@@ -3,12 +3,18 @@
 
 覆盖范围（对应手册第二部分各章 + RFC 8998）：
   * SM3：GB/T 32905 附录 A 全部 KAT（"abc" / "abcd"×64）
+  * HMAC-SM3：RFC 2104 构造，3 组向量（经 OpenSSL 3.0 独立实现交叉复核）
   * SM4：GB/T 32907 附录 A KAT + 全部 32 个轮密钥 + 解密对合性
+  * CMAC-SM4：RFC 4493 构造移植，子密钥 + 4 组消息向量
   * ZUC：GM/T 0001.1 附录 C 官方向量（全零 / 全 FF）
-  * 128-EIA3：GM/T 0001.3 附录 B 示例 1 的 MAC 与示例 2 的 IV 构造
+  * 128-EEA3：GM/T 0001.2 附录 B 官方向量（示例 1/2，密标委官方英译本核对）
+  * 128-EIA3：GM/T 0001.3 附录 B 示例 1 的 MAC、示例 2 的 IV 构造与完整 MAC
+  * HKDF-SM3：RFC 5869 构造，2 组向量（经 OpenSSL 3.0 kdf 命令交叉复核）
   * SM2：sm2p256v1 曲线自检（在曲线上 / a=p−3 / [n]G=O）、
           手册 3.4 节签名示例全链路（P_A/Z_A/e/x₁/r/s）、
-          手册 5.4 节加密示例全链路（C₁/C₂/C₃）
+          手册 3.6 节确定性签名（RFC 6979 结构 + SM3）的 k/r/s、
+          手册 5.4 节加密示例全链路（C₁/C₂/C₃）、
+          手册 4.3 节密钥交换示例全链路（RA/RB/x̄/t/V=U/K/S_A/S_B）
   * SM4-GCM/CCM：RFC 8998 附录 A 测试向量（含 GCM/CCM 模式的独立实现）
   * SM9：GB/T 38635 曲线自检（P₁/P₂ 在曲线上、[n]P=O），附录 A 签名示例与
           附录 C/D 加密示例的全部非配对分量（主公钥、H1、用户私钥/公钥、
@@ -51,6 +57,31 @@ def rol(x, n):
 
 def i2b(x, length):
     return x.to_bytes(length, "big")
+
+
+def hmac_sm3(key: bytes, msg: bytes) -> bytes:
+    """HMAC-SM3（RFC 2104 构造：SM3 块长 64、输出 32）"""
+    if len(key) > 64:
+        key = sm3(key)
+    key = key + b"\x00" * (64 - len(key))
+    ipad = bytes(k ^ 0x36 for k in key)
+    opad = bytes(k ^ 0x5C for k in key)
+    return sm3(opad + sm3(ipad + msg))
+
+
+def hkdf_sm3_extract(salt: bytes, ikm: bytes) -> bytes:
+    """HKDF-SM3 extract（RFC 5869：salt 为空时取 32 字节零，即 HashLen）"""
+    return hmac_sm3(salt if salt else b"\x00" * 32, ikm)
+
+
+def hkdf_sm3_expand(prk: bytes, info: bytes, length: int) -> bytes:
+    """HKDF-SM3 expand（RFC 5869：T(i) = HMAC(PRK, T(i-1)‖info‖i)）"""
+    t, okm, i = b"", b"", 1
+    while len(okm) < length:
+        t = hmac_sm3(prk, t + info + bytes([i]))
+        okm += t
+        i += 1
+    return okm[:length]
 
 
 # ----------------------------------------------------------------------
@@ -161,6 +192,30 @@ def sm4_crypt(block, rk):
 def sm4_enc(key16, block16):
     """单分组加密 E(K, B)：GCM/CCM 模式的底层调用"""
     return sm4_crypt(block16, sm4_key_schedule(key16))
+
+
+def sm4_cmac(key: bytes, msg: bytes) -> bytes:
+    """CMAC-SM4（GB/T 15852.1 / RFC 4493 结构移植）：
+    子密钥 L→K1→K2 在 GF(2^128) 上乘 x（约减常数 0x87），与 AES-CMAC 同构"""
+    rk = sm4_key_schedule(key)
+    l = int.from_bytes(sm4_crypt(b"\x00" * 16, rk), "big")
+    k1 = ((l << 1) ^ (0x87 if l >> 127 else 0)) & ((1 << 128) - 1)
+    k2 = ((k1 << 1) ^ (0x87 if k1 >> 127 else 0)) & ((1 << 128) - 1)
+    k1b, k2b = k1.to_bytes(16, "big"), k2.to_bytes(16, "big")
+    n = (len(msg) + 15) // 16
+    if n == 0:
+        body, last = b"", bytes(a ^ b for a, b in zip(
+            (1).to_bytes(16, "big"), k2b))
+    elif len(msg) % 16 == 0:
+        body, last = msg[:-16], bytes(a ^ b for a, b in zip(msg[-16:], k1b))
+    else:
+        pad = msg + b"\x80" + b"\x00" * (15 - len(msg) % 16)
+        body, last = msg[: (len(msg) // 16) * 16], bytes(
+            a ^ b for a, b in zip(pad[-16:], k2b))
+    x = b"\x00" * 16
+    for i in range(0, len(body), 16):
+        x = sm4_crypt(bytes(a ^ b for a, b in zip(x, body[i:i + 16])), rk)
+    return sm4_crypt(bytes(a ^ b for a, b in zip(x, last)), rk)
 
 
 # ----------------------------------------------------------------------
@@ -298,6 +353,28 @@ def eia3_mac(ik: bytes, count, bearer, direction, length_bits, msg: bytes) -> in
     return T ^ window(32 * (L - 1))
 
 
+def eea3_iv(count: int, bearer: int, direction: int) -> bytes:
+    """128-EEA3 的 IV 构造（GM/T 0001.2 附录 A.2）：
+    IV[0..3]=COUNT；IV[4]=BEARER(5位)‖DIRECTION(1位)‖00(2位)；
+    IV[5..7]=0；IV[8..11]=IV[0..3]；IV[12..15]=IV[4..7]
+    注意与 EIA3 不同：EEA3 的方向位进 IV[4]，且 IV[8] 不与方向位异或"""
+    iv = bytearray(16)
+    iv[0:4] = count.to_bytes(4, "big")
+    iv[4] = ((bearer << 3) | (direction << 2)) & 0xFF
+    iv[5:8] = b"\x00\x00\x00"
+    iv[8:12] = iv[0:4]
+    iv[12:16] = iv[4:8]
+    return bytes(iv)
+
+
+def eea3(ck: bytes, count, bearer, direction, msg: bytes) -> bytes:
+    """128-EEA3：ZUC 密钥流与明文按位异或（加密解密同体）"""
+    words = (len(msg) * 8 + 31) // 32
+    z = ZUC(ck, eea3_iv(count, bearer, direction))
+    ks = b"".join(z.next_word().to_bytes(4, "big") for _ in range(words))
+    return bytes(m ^ k for m, k in zip(msg, ks))
+
+
 # ----------------------------------------------------------------------
 # SM2（GB/T 32918-2016 / 原GM/T 0003-2012）
 # ----------------------------------------------------------------------
@@ -367,6 +444,22 @@ def main():
           bytes.fromhex("b965764c8bebb091c7602b74afd34eef"
                         "b531dccb4e0076d9b7cd813199b45971"))
 
+    print()
+    print("== HMAC-SM3（RFC 2104 构造，经 OpenSSL 交叉复核） ==")
+    check('HMAC-SM3(key=0x0b×20, "Hi There")',
+          hmac_sm3(b"\x0b" * 20, b"Hi There"),
+          bytes.fromhex("51b00d1fb49832bfb01c3ce27848e59f"
+                        "871d9ba938dc563b338ca964755cce70"))
+    check('HMAC-SM3("key", "The quick brown fox…")',
+          hmac_sm3(b"key", b"The quick brown fox jumps over the lazy dog"),
+          bytes.fromhex("bd4a34077888162b210645b8ebf74b9a"
+                        "f357303789357a27c7fc457244ebd398"))
+    check('HMAC-SM3(key=0xAA×131 超长密钥, 54B 消息)',
+          hmac_sm3(b"\xaa" * 131,
+                   b"Test Using Larger Than Block-Size Key - Hash Key First"),
+          bytes.fromhex("b4fd844e13342002f0b2e0690ea7741f"
+                        "1497d993a70494cea601e657bedf67a0"))
+
     print("\n== SM4（GB/T 32907 附录 A） ==")
     mk = bytes.fromhex("0123456789abcdeffedcba9876543210")
     rk = sm4_key_schedule(mk)
@@ -380,6 +473,32 @@ def main():
     """.split()]
     check("SM4 全部 32 个轮密钥", 1 if rk == doc_rk else 0, 1)
     check("SM4 解密=逆序轮密钥再加密", sm4_crypt(sm4_crypt(mk, rk), rk[::-1]), mk)
+
+    print()
+    print("== CMAC-SM4（RFC 4493 构造移植） ==")
+    ck = bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c")
+    crk = sm4_key_schedule(ck)
+    l0 = int.from_bytes(sm4_crypt(b"\x00" * 16, crk), "big")
+    k1 = ((l0 << 1) ^ (0x87 if l0 >> 127 else 0)) & ((1 << 128) - 1)
+    k2 = ((k1 << 1) ^ (0x87 if k1 >> 127 else 0)) & ((1 << 128) - 1)
+    check("L = E_K(0¹²⁸)", l0.to_bytes(16, "big"),
+          bytes.fromhex("09cbe15d851b5b0bbba4ca42eae3ff70"))
+    check("K1 = L·x（0x87 回卷）", k1.to_bytes(16, "big"),
+          bytes.fromhex("1397c2bb0a36b61777499485d5c7fee0"))
+    check("K2 = K1·x", k2.to_bytes(16, "big"),
+          bytes.fromhex("272f8576146d6c2eee93290bab8ffdc0"))
+    m16 = bytes.fromhex("6bc1bee22e409f96e93d7e117393172a")
+    m40 = m16 + bytes.fromhex("ae2d8a571e03ac9c9eb76fac45af8e51") + m16[:8]
+    m64 = m40 + m16[:8] + bytes.fromhex(
+        "30c81c46a35ce411e5fbc1191a0a52ef") + m16[:4]
+    check("CMAC-SM4(空消息)", sm4_cmac(ck, b""),
+          bytes.fromhex("178ae41f93ec6e9c430864360932ef6b"))
+    check("CMAC-SM4(16B 整块)", sm4_cmac(ck, m16),
+          bytes.fromhex("4e4c2a4417e567fef081e0fab55a5762"))
+    check("CMAC-SM4(40B 非整块)", sm4_cmac(ck, m40),
+          bytes.fromhex("d221ad48e4318a5b308a91b915d7f75b"))
+    check("CMAC-SM4(64B)", sm4_cmac(ck, m64),
+          bytes.fromhex("6ce2999f2464aefe04396323135ba08c"))
 
     print("\n== ZUC（GM/T 0001.1 附录 C） ==")
     z = ZUC(b"\x00" * 16, b"\x00" * 16)
@@ -395,6 +514,43 @@ def main():
     check("EIA3 示例2 IV 构造（COUNT=A94059DA,BEARER=A,DIR=1）",
           eia3_iv(0xA94059DA, 0xA, 1),
           bytes.fromhex("a94059da50000000294059da50008000"))
+    # 示例2 完整验证：IK=C9E6…, LENGTH=0x241=577bit（72B 消息 + 1 个 0 比特）
+    eia3_m2 = bytes.fromhex(
+        "983b41d47d780c9e1ad11d7eb70391b1de0b35da2dc62f83e7b78d6306ca0ea0"
+        "7e941b7be91348f9fcb170e2217fecd97f9f68adb16e5d7d21e569d280ed775c"
+        "ebde3f4093c5388100")
+    check("EIA3 示例2 完整 MAC（577bit 完整消息）",
+          eia3_mac(bytes.fromhex("c9e6cec4607c72db000aefa88385ab0a"),
+                   0xA94059DA, 0xA, 1, 577, eia3_m2), 0xFAE8FF0B)
+
+    print("\n== 128-EEA3（GM/T 0001.2 附录 B 官方向量） ==")
+    check("EEA3 示例1 IV（COUNT=66035492,BEARER=F,DIR=0）",
+          eea3_iv(0x66035492, 0xF, 0),
+          bytes.fromhex("66035492780000006603549278000000"))
+    # 示例1：LENGTH=0xC1=193bit（24 整字节 + 1 个 0 比特），仅有效位参与比较
+    eea3_c1 = eea3(bytes.fromhex("173d14ba5003731d7a60049470f00a29"),
+                   0x66035492, 0xF, 0,
+                   bytes.fromhex("6cf65340735552ab0c9752fa6f9025fe"
+                                 "0bd675d9005875b200"))
+    check("EEA3 示例1 密文（前 24 字节）", eea3_c1[:24],
+          bytes.fromhex("a6c85fc66afb8533aafc2518dfe784940ee1e4b030238cc8"))
+    check("EEA3 示例1 第 193 位密文位", (eea3_c1[24] >> 7) & 1, 0)
+    check("EEA3 示例2 IV（COUNT=00056823,BEARER=18,DIR=1）",
+          eea3_iv(0x56823, 0x18, 1),
+          bytes.fromhex("00056823c400000000056823c4000000"))
+    eea3_c2 = eea3(bytes.fromhex("e5bd3ea0eb55ade866c6ac58bd54302a"),
+                   0x56823, 0x18, 1,
+                   bytes.fromhex(
+                       "14a8ef693d678507bbe7270a7f67ff5006c3525b9807e467c4e56000"
+                       "ba338f5d429559036751822246c80d3b"
+                       "38f07f4be2d8ff5805f5132229bde93bbbdcaf382bf1ee972fbf9977"
+                       "bada8945847a2a6c9ad34a667554e04d1f7fa2c33241bd8f01ba220d"))
+    check("EEA3 示例2 密文（LENGTH=0x320=800bit 整字节）", eea3_c2,
+          bytes.fromhex(
+              "131d43e0dea1be5c5a1bfd971d852cbf712d7b4f57961fea3208afa8bca433f4"
+              "56ad09c7417e58bc69cf8866d1353f74865e80781d202dfb3ecff7fcbc3b190f"
+              "e82a204ed0e350fc0f6f2613b2f2bca6df5a473a57a4a00d985ebad880d6f238"
+              "64a07b01"))
 
     print("\n== SM2 曲线自检（GB/T 32918.5） ==")
     check("Gy² ≡ Gx³+ax+b (mod p)",
@@ -425,6 +581,51 @@ def main():
     check("s = (1+d)⁻¹(k−rd) mod n", s,
           0x35A4EB74DDC465AB33D53BDCEE3DB7F4E318E864795C3DE78CEC9BC63E5DCF4A)
 
+    print()
+    print("== SM2 确定性签名（手册 3.6 节，RFC 6979 结构 + SM3） ==")
+
+    def sm2_derive_k(d: int, e: int):
+        """RFC 6979 的 HMAC 循环移植：HMAC→HMAC-SM3，q=n，h1=e（mod n）"""
+        q = SM2_N
+        int2octets = lambda x: x.to_bytes(32, "big")
+        h1 = e % q
+        bho = int2octets(h1)
+        V = b"\x01" * 32
+        K = b"\x00" * 32
+        K = hmac_sm3(K, V + b"\x00" + int2octets(d) + bho)
+        V = hmac_sm3(K, V)
+        K = hmac_sm3(K, V + b"\x01" + int2octets(d) + bho)
+        V = hmac_sm3(K, V)
+        while True:
+            T = b""
+            while len(T) < 32:
+                V = hmac_sm3(K, V)
+                T += V
+            k = int.from_bytes(T, "big")
+            if 1 <= k <= q - 1:
+                yield k
+            K = hmac_sm3(K, V + b"\x00")
+            V = hmac_sm3(K, V)
+
+    for k_det in sm2_derive_k(d_a, e):
+        x1d = ec_mul(k_det, SM2_G)[0]
+        rd = (e + x1d) % SM2_N
+        if rd == 0 or rd + k_det == SM2_N:
+            continue
+        sd = pow(1 + d_a, -1, SM2_N) * (k_det - rd * d_a) % SM2_N
+        if sd == 0:
+            continue
+        check("确定性 k（RFC 6979 结构派生）", k_det, int(
+            "78F1C31494614F9931F7752C0E605982"
+            "BA2D5CAA412CCA61FD5D0FB5DB34B66E", 16))
+        check("确定性签名 r", rd, int(
+            "EA3A91414124E6D2A6BCB670FBCEE293"
+            "1B9983FDE8739D36D21AD2CF25B48975", 16))
+        check("确定性签名 s", sd, int(
+            "30EDC7CAE5892B6A421A5C4FDDB229D2"
+            "F485B9D9FA36848378AD7C99CBA860DB", 16))
+        break
+
     print("\n== SM2 加密示例（手册 5.4 节） ==")
     d_b = 0x3F59C7DD1D3F84B1B2A9F5A4021EBFA6C9CD3B6E2E5F0C4A0F4D07C8C3B3E1D3
     k_e = 0x7E0E9A5C3F8B7D2A6E1F4C0B9D8A3E7215C6B0F4D2E8A1C3B7F9E5D04A6C2B88
@@ -440,6 +641,77 @@ def main():
     c3 = sm3(i2b(x2, 32) + b"encryption standard" + i2b(y2, 32))
     check("C₃ = SM3(x₂‖M‖y₂)", c3,
           bytes.fromhex("72bf3d0ba986804c18bedddd822c750061de9ec8dd1324f542377e55d2dab533"))
+
+    print()
+    print("== SM2 密钥交换（手册 4.3 节，自选参数全链路） ==")
+    d_kx_a = 0x4C8F63C398AC90CB18B2FA8BD433C6C068C8D803DFF79792A519A55171B1B650C
+    d_kx_b = 0x1D06E1F3BE6D3E38AC6D3989E4E42A33E18C4A28A9280C43B7D4F23C739459A2
+    r_kx_a = 0x7E0E9A5C3F8B7D2A6E1F4C0B9D8A3E7215C6B0F4D2E8A1C3B7F9E5D04A6C2B88
+    r_kx_b = 0x5A8C2D9E3F1B7A6C0D4E8F2A6B9C1D3E5F7A0B2C4D6E8F1A3B5C7D9E0F2A4B6C8
+    P_kxA = ec_mul(d_kx_a, SM2_G)
+    P_kxB = ec_mul(d_kx_b, SM2_G)
+    Z_kxA = sm2_z(b"1234567812345678", P_kxA)
+    Z_kxB = sm2_z(b"1234567812345678", P_kxB)
+    RA_pt = ec_mul(r_kx_a, SM2_G)
+    RB_pt = ec_mul(r_kx_b, SM2_G)
+    check("RA = [r_A]G", 1 if RA_pt == (
+        0xF5AF3EE5F35827F745419C3DBDC344B41F320FBC101D6984CF6F517CB7A23B67,
+        0x3458CD1538936CBC8967EDFE21720FDFDFBA14F6E8B14E9F8961D61476FD7858) else 0, 1)
+    check("RB = [r_B]G", 1 if RB_pt == (
+        0x269401AD265BC406DA5903F5CD4D2CDD5FDB5A7A1366C799C1D6AE01549F1B51,
+        0x2AA065843664DE39C4B39F1B429336EF92954383596496733E8D0A2D04B29524) else 0, 1)
+    w = 127                                     # w = ⌈⌈log2 n⌉/2⌉ − 1 = 127
+    fold = lambda x: (1 << w) + (x & ((1 << w) - 1))
+    xbA = fold(RA_pt[0])
+    xbB = fold(RB_pt[0])
+    check("x̄_A = 2^127 + (RA.x & (2^127−1))", xbA,
+          0x9F320FBC101D6984CF6F517CB7A23B67)
+    check("x̄_B = 2^127 + (RB.x & (2^127−1))", xbB,
+          0xDFDB5A7A1366C799C1D6AE01549F1B51)
+    t_a = (d_kx_a + xbA * r_kx_a) % SM2_N
+    t_b = (d_kx_b + xbB * r_kx_b) % SM2_N
+    check("t_A = (d_A + x̄_A·r_A) mod n", t_a,
+          0x9570D2C131D2F29B6533F2EB26196922E01BECBAE394B3D6ACD4C744B9D2AFBB)
+    check("t_B = (d_B + x̄_B·r_B) mod n", t_b,
+          0x396F65FF96AEBA1C199D26C39E3E25FC7235EB8FBB038130D55C073BAF36C5FE)
+    V_pt = ec_mul(t_b, ec_add(P_kxA, ec_mul(xbA, RA_pt)))   # B 侧共享点
+    U_pt = ec_mul(t_a, ec_add(P_kxB, ec_mul(xbB, RB_pt)))   # A 侧共享点
+    check("V = [t_B](P_A + [x̄_A]RA)", 1 if V_pt == (
+        0x03FADB8917756A2D7B5646D5D54A2549BEC6F3FF45219D0F59D42DE1008502B0,
+        0xD156686A55BBF87C7DDE8F8EE71358DF2AAF022109AAC276672077EEC6CF0937) else 0, 1)
+    check("U = [t_A](P_B + [x̄_B]RB) 且 U = V", 1 if U_pt == V_pt else 0, 1)
+    kx_k = sm2_kdf(i2b(V_pt[0], 32) + i2b(V_pt[1], 32) + Z_kxA + Z_kxB, 16)
+    check("K = KDF(x_V‖y_V‖Z_A‖Z_B, 16)", kx_k,
+          bytes.fromhex("b017243aad01b6079daf6cc2dc3e2f41"))
+    inner_b = (i2b(V_pt[0], 32) + Z_kxA + Z_kxB + i2b(xbA, 32) + i2b(xbB, 32)
+               + i2b(RB_pt[0], 32) + i2b(RB_pt[1], 32))
+    s_b = sm3(b"\x02" + i2b(V_pt[1], 32) + sm3(inner_b))
+    inner_a = (i2b(V_pt[0], 32) + Z_kxA + Z_kxB + i2b(xbA, 32) + i2b(xbB, 32)
+               + i2b(RA_pt[0], 32) + i2b(RA_pt[1], 32))
+    s_a = sm3(b"\x03" + i2b(V_pt[1], 32) + sm3(inner_a))
+    check("S_B = Hash(02‖y_V‖Hash(x_V‖Z_A‖Z_B‖x̄_A‖x̄_B‖RB))", s_b,
+          bytes.fromhex("9478a012aa50b467b2648fee273155c563e4c6b14f467cacb977d344de73b064"))
+    check("S_A = Hash(03‖y_U‖Hash(x_U‖Z_A‖Z_B‖x̄_A‖x̄_B‖RA))", s_a,
+          bytes.fromhex("4e67ecff1d125558bac89f532f7422e3d2bea0747ec8fe773d54ae0cbdf8718f"))
+
+    print()
+    print("== HKDF-SM3（RFC 5869 构造，经 OpenSSL kdf 交叉复核） ==")
+    prk1 = hkdf_sm3_extract(bytes(range(0x00, 0x0D)), b"\x0b" * 22)
+    check("用例1 PRK = HMAC(salt, IKM)", prk1,
+          bytes.fromhex("e0d6f7b0bd056327b7659f1f39ad8505"
+                        "61fbcf4fb10fb58e88eafa55cf7cd01e"))
+    check("用例1 OKM（salt=13B, info=10B, L=42）",
+          hkdf_sm3_expand(prk1, bytes(range(0xF0, 0xFA)), 42),
+          bytes.fromhex("c69fe91b7aaee2dd5718d72dcaee0cce"
+                        "93f1b8e41f792da51261b6a517e68b36"
+                        "ed2c595572b01dfa359b"))
+    prk2 = hkdf_sm3_extract(b"", b"\x11" * 32)
+    check("用例2 PRK（salt 为空 → 32 字节零）", prk2,
+          bytes.fromhex("017a01368be62168dca3c5a3e6bf119a"
+                        "64c14d6b6f18c596f69440a2386d0ba0"))
+    check("用例2 OKM（info='tlcp session key', L=16）",
+          hkdf_sm3_expand(prk2, b"tlcp session key", 16),
+          bytes.fromhex("18ab6a719741d1ff20ecf9b8da6eec0d"))
 
     # ------------------------------------------------------------------
     # SM4-GCM / SM4-CCM（RFC 8998 附录 A）

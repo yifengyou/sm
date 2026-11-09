@@ -187,6 +187,29 @@ HMAC-SM3(K, m) = SM3( (K′ ⊕ opad) ‖ SM3( (K′ ⊕ ipad) ‖ m ) )
 
 HMAC-SM3 是 TLCP 记录层的 MAC 与 PRF、以及各类国密协议里 MAC/KBKDF 的基础构件。
 
+测试向量（构造为 RFC 4231 风格，数值经 OpenSSL 3.0 独立实现交叉复核，复核脚本已收录）：
+
+```text
+HMAC-SM3(key = 0x0b×20, m = "Hi There")
+  = 51B00D1F B49832BFB01C3CE27848E59F 871D9BA938DC563B338CA964755CCE70
+
+HMAC-SM3(key = "key", m = "The quick brown fox jumps over the lazy dog")
+  = BD4A3407 7888162B210645B8EBF74B9A F357303789357A27C7FC457244EBD398
+
+HMAC-SM3(key = 0xAA×131（超长密钥，先压缩）, m = "Test Using Larger Than Block-Size Key - Hash Key First")
+  = B4FD844E 13342002F0B2E0690EA7741F 1497D993A70494CEA601E657BEDF67A0
+```
+
+OpenSSL 速验（第二实现交叉核对）：
+
+```bash
+echo -n "The quick brown fox jumps over the lazy dog" \
+  | openssl dgst -sm3 -hmac key
+# 输出应含 bd4a3407788816…（与上表第二组一致）
+```
+
+> 顺带的互操作提示：GB/T 15852.2-2024《网络安全技术 消息鉴别码 第2部分：采用专门设计的杂凑函数的机制》（2025-04-01 实施，替代 2012 版）是 HMAC 类 MAC 的国标载体，机制与 ISO/IEC 9797-2 / RFC 2104 同构，SM3 版 HMAC 的合规引用可挂靠该标准族。
+
 ### 8.2 KDF
 
 国密体系通用的"SM3 计数器模式 KDF"（见 SM2 章 5.3 节），TLCP 的密钥块、SM9 的会话密钥都由它派生。
@@ -213,7 +236,7 @@ SM3 不是口令存储算法（无盐、无慢化）。需要存口令时应使�
 | --- | --- |
 | SM2 签名 | Z 值与消息摘要 e（见 SM2 章） |
 | SM2 加密 | 校验值 C₃ 与 KDF |
-| SM9 | H1/H2/H3/H4 杂凑到整数/曲线的内部哈希 |
+| SM9 | 密码函数 H1/H2 的内部哈希（标识→曲线点、签名 t 值，见 SM9 章） |
 | TLCP / GB/T 38636 | 记录层 MAC（HMAC-SM3）、握手 PRF、Finished 校验 |
 | 数据完整性校验 | 配置/固件摘要、日志链式哈希、软件供应链校验 |
 | 区块链 | 联盟链区块头与交易摘要（国内联盟链常用 SM3） |
