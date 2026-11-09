@@ -41,6 +41,9 @@
 * [安全接入协议族与 WAPI](part5/vpn.md)
 * [可信计算与 TCM](part5/trusted.md)
 * [行业应用画像](part5/applications.md)
+* [工控与 OT 场景的国密化](part5/ics.md)
+* [电子合同与存证出证全流程](part5/econtract.md)
+* [密码服务平台与密码中台](part5/crypto-platform.md)
 * [后量子时代的国密](part5/pqc.md)
 
 ## 附录
