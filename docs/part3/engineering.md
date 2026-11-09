@@ -163,7 +163,43 @@ App/浏览器 ──TLCP──► 国密网关（Tengine/Tongsuo nginx，双证�
                         └──SDF/TCP──► 服务器密码机集群（签名/验签/加密卸载）
 ```
 
-nginx 侧：Tengine 及 Tongsuo 生态通过 `ssl_sign_certificate(_key)`、`ssl_enc_certificate(_key)` 指令配置双证书（不同版本的编译开关与 listen 参数以对应版本文档为准）。
+nginx 侧：Tengine 及 Tongsuo 生态通过 `ssl_sign_certificate(_key)`、`ssl_enc_certificate(_key)` 指令配置双证书（不同版本的编译开关与 listen 参数以对应版本文档为准）。以 Tengine + Tongsuo（tongsuo.net 官方教程）为例的完整落地方块：
+
+```bash
+# 编译：Tengine 2.3.x + Tongsuo（ngx_tongsuo_ntls 模块，enable-ntls 开启 NTLS/TLCP）
+./configure --prefix=/usr/local/tengine \
+  --add-module=modules/ngx_tongsuo_ntls \
+  --with-openssl=../Tongsuo-8.2.1 --with-openssl-opt="enable-ntls" \
+  --with-http_ssl_module --with-stream --with-stream_ssl_module --with-stream_sni
+make -j && make install
+```
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name yourdomain.example.com;
+    enable_ntls on;                              # 开启国密（NTLS/TLCP）
+    # 国密双证书：签名在前、加密在后
+    ssl_sign_certificate     cert/sign.crt;      ssl_sign_certificate_key     cert/sign.key;
+    ssl_enc_certificate      cert/enc.crt;       ssl_enc_certificate_key      cert/enc.key;
+    # 国际算法双栈（可选）：通用浏览器自动走 RSA/ECC 路径
+    ssl_certificate          cert/server_rsa.crt; ssl_certificate_key         cert/server_rsa.key;
+    ssl_session_cache shared:SSL:1m;  ssl_session_timeout 5m;
+    # 国密套件 + 国际回退（顺序即优先级，防降级需配合严格的协议/套件告警）
+    ssl_ciphers ECDHE-SM2-SM4-GCM-SM3:ECC-SM2-SM4-GCM-SM3:ECDHE-SM2-SM4-CBC-SM3:ECC-SM2-SM4-CBC-SM3:ECDHE-RSA-AES128-GCM-SHA256;
+}
+```
+
+联调自测（网关机本机起 Tongsuo 客户端，逐套件验证）：
+
+```bash
+/opt/tongsuo/bin/openssl s_client -connect localhost:443 \
+  -cipher ECDHE-SM2-SM4-CBC-SM3 -enable_ntls -ntls \
+  -sign_cert CS.cert.pem -sign_key CS.key.pem \
+  -enc_cert  CE.cert.pem  -enc_key  CE.key.pem -verifyCAfile CA.cert.pem
+```
+
+> 时效注记（2026）：OpenSSL 3.5 系列修复了 **SM2 签名生成路径的时序侧信道（CVE-2026-77696）**——主线密码库也会在国密实现上出侧信道问题，生产版本选型与升级跟踪应把"国密实现的 CVE 历史"纳入视野（参见密码模块章侧信道一节）。
 
 ## 6. 性能工程
 

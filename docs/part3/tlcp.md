@@ -186,6 +186,23 @@ AAD   = FEEDFACEDEADBEEFFEEDFACEDEADBEEFABADDAD2
 | 生态 | 国产网关/浏览器/客户端 SDK | Tongsuo、OpenSSL 3.2+、浏览器未广泛支持 |
 | 典型选择 | 政务、金融存量、网关互联 | 新一代网关、国际化系统 |
 
+RFC 8998 的部署实操（OpenSSL 3.5+ 原生支持，无需 Tongsuo）：
+
+```bash
+# 服务端：SM2 单证书 + TLS 1.3 国密套件
+openssl s_server -accept 4433 -cert sm2.crt -key sm2.key \
+  -tls1_3 -ciphersuites SM4-GCM-SM3 -groups curveSM2 -sigalgs sm2sig_sm3
+
+# 客户端联调
+openssl s_client -connect host:4433 \
+  -tls1_3 -ciphersuites SM4-GCM-SM3 -groups curveSM2 -sigalgs sm2sig_sm3
+
+# 套件名速查：SM4-GCM-SM3（TLS_SM4_GCM_SM3，0x00C6）/ SM4-CCM-SM3（0x00C7）
+# 曲线：curveSM2（41）；签名算法：sm2sig_sm3（0x0708）
+```
+
+补充两点（2026 时点）：OpenSSL 3.5+ 同时支持 **TLS 1.2 的 SM 套件**（`ECDHE-SM4-GCM-SM3` 等，走 curveSM2 的 ECDHE，注意这不是 TLCP、也无双证书）；3.5 系列还修复了 SM2 签名生成路径的时序侧信道（CVE-2026-77696），生产环境建议跟踪到修复版本。
+
 ## 9. 部署实战（Tongsuo）
 
 Tongsuo（铜锁，原 BabaSSL，OpenSSL 分支）是 TLCP 支持最完整的开源实现：
@@ -226,9 +243,20 @@ tongsuo s_client -enable_ntls -ntls -connect localhost:443
 
 ## 10. 客户端生态现状
 
-- **浏览器**：主流国际浏览器不内置 TLCP；国内政务场景依赖专用浏览器或国密安全控件；
-- **App/SDK**：腾讯 Kona（Java）、各密码厂商 SDK、Tongsuo/GmSSL 移动端裁剪版承担大部分客户端接入；
-- **网关互联**：国密 SSL VPN 网关（GM/T 0024 体系设备）与 TLCP 网关对接时注意套件兼容（老设备可能只支持 CBC/SM1 套件）。
+**浏览器**：主流国际浏览器（Chrome/Firefox/Safari）不内置 TLCP；国内可用的国密浏览器主要是 **360 安全浏览器、奇安信浏览器、红莲花浏览器** 等（基于 Chromium 魔改内置国密栈，根证书预置各家不同，政务项目通常指定其一）。常规做法是网关侧双栈（TLCP + 国际 TLS），让普通浏览器自动走国际路径、指定浏览器走国密路径。
+
+**移动端 App**（Android/iOS 是客户端接入的主战场）：
+
+| 路线 | 做法 | 注意 |
+| --- | --- | --- |
+| 纯 Java 库（Android 首选） | **腾讯 Kona SM Suite**（TencentKonaSMSuite）：纯 Java、无 JDK 内部 API 依赖、官方声明支持 Android，Maven Central 声明 Gradle 依赖即可；支持 TLCP 双证书 + RFC 8998 + TLS 1.2 国密套件 | iOS 不适用（无 JVM） |
+| BC + 协议库组合 | BouncyCastle 提供算法 + Kona SSL 提供协议（长安链 Java SDK v2.3.8 起即此组合，纯 Java 替代了 JNI 方案） | 注意 BC 的 SM2 密文格式/ID 缺省值开关 |
+| C 库静态编译 | GmSSL/Tongsuo 裁剪后静态链入（iOS 与 C++ 跨平台场景的现实选择） | 编译链与裁剪成本高；iOS 需处理位宽/字节序自检 |
+| 厂商 SDK | 密码厂商移动安全 SDK（含协同签名/白盒/密钥更新） | 合规材料齐全，绑定厂商生态 |
+
+**会话恢复**：TLCP 标准文本定义了基于 session_id 的简化握手；实现层面 **KonaSSL 等已支持 Session Ticket 模式**（ticket 由服务端发钥加密、无服务端会话缓存状态，多实例网关场景更友好，Kona 默认即 ticket 模式）——对接老网关时注意对端可能只认 session_id。
+
+**网关互联**：国密 SSL VPN 网关（GM/T 0024 体系设备）与 TLCP 网关对接时注意套件兼容（老设备可能只支持 CBC/SM1 套件）。
 
 ## 11. 排错清单（按频率排序）
 
@@ -243,4 +271,4 @@ tongsuo s_client -enable_ntls -ntls -connect localhost:443
 
 ---
 
-**延伸阅读**：GB/T 38636-2020 全文（含握手报文格式与全部套件定义）；GM/T 0054-2018；RFC 8998；RFC 8446（TLS 1.3，理解 TLCP 的对照系）；Tongsuo 文档（TLCP/NTLS 实现与 wiki）。
+**延伸阅读**：GB/T 38636-2020 全文（含握手报文格式与全部套件定义）；GM/T 0054-2018；RFC 8998；RFC 8446（TLS 1.3，理解 TLCP 的对照系）；Tongsuo 文档（TLCP/NTLS 实现与 wiki，含"Tengine + Tongsuo 国密使用教程"）；TencentKonaSMSuite（TLCP 的纯 Java/Android 实现与文档）。
