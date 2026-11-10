@@ -1,0 +1,21 @@
+name: vectors
+
+# 每次提交/PR 自动运行手册全部复核（76 + 11 = 87 项检查），
+# 保证文档中的算法流程、测试向量与数值示例始终可程序验证。
+on: [push, pull_request]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 复核脚本（零依赖，76 项）
+        run: python3 scripts/verify_test_vectors.py
+      - name: SM9 配对分量复核（gmalg 交叉实现，11 项）
+        run: |
+          python -m pip install --upgrade pip
+          pip install gmalg
+          python3 scripts/verify_sm9_pairing.py

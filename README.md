@@ -42,6 +42,9 @@
 * [安全接入协议族与 WAPI](docs/part5/vpn.md)
 * [可信计算与 TCM](docs/part5/trusted.md)
 * [行业应用画像](docs/part5/applications.md)
+* [工控与 OT 场景的国密化](docs/part5/ics.md)
+* [电子合同与存证出证全流程](docs/part5/econtract.md)
+* [密码服务平台与密码中台](docs/part5/crypto-platform.md)
 * [后量子时代的国密](docs/part5/pqc.md)
 
 ## 附录
@@ -50,5 +53,11 @@
 * [附录 B：常见问题 FAQ](docs/appendix/faq.md)
 * [附录 C：术语表](docs/appendix/glossary.md)
 
-测试向量一键复核：`python3 scripts/verify_test_vectors.py`（SM3/SM4/ZUC/EIA3 官方 KAT、RFC 8998 SM4-GCM/CCM、SM2 与 SM9 数值示例，42/42 通过）
+## 测试向量一键复核
+
+```bash
+python3 scripts/verify_test_vectors.py   # 零依赖，76 项：各算法官方 KAT + 手册数值示例全链路
+pip install gmalg && \
+python3 scripts/verify_sm9_pairing.py    # SM9 配对驱动分量 11 项（gmalg 独立实现交叉复核）
+```
 

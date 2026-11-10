@@ -260,6 +260,12 @@ tongsuo s_client -enable_ntls -ntls -connect localhost:443
 
 **网关互联**：国密 SSL VPN 网关（GM/T 0024 体系设备）与 TLCP 网关对接时注意套件兼容（老设备可能只支持 CBC/SM1 套件）。
 
+**报文级调试**（排错最后一层的工具箱）：
+
+- **Tongsuo 客户端带报文打印**：`openssl s_client -connect host:443 -enable_ntls -ntls -msg` 逐消息输出 hex——快速核对三件事：ClientHello 的版本字节 `01 01`、服务端 Certificate 消息里**两张**（签名在前、加密在后）证书、密钥交换后的 ChangeCipherSpec/Finished 序列；
+- **抓包**：Wireshark 的标准 TLS dissector **不识别 TLCP**（版本号 0x0101 显示为 unknown/解析错乱）——抓包定位用"TCP 流 + hex 视图"肉眼比对，或用支持 NTLS 的定制版；这是国密联调与通用抓包经验最大的差异点；
+- **密钥推导对不上的排查顺序**：先比对预主密钥（ECC 套件 48 字节 SM2 解密结果是否一致）→ 再比对 master_secret（PRF 输入顺序：ClientRandom 在前）→ 最后比对 key_block 六段切分（先客户端后服务端、先 MAC 后密钥再 IV）——手册第 5 节的公式即按此顺序展开。
+
 ## 11. 排错清单（按频率排序）
 
 | 症状 | 根因 |

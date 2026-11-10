@@ -13,7 +13,7 @@
 | Java | 腾讯 Kona / 各厂商 SDK | TLS 1.3 国密、TLCP | 面向 App 客户端接入 |
 | Go | **emmansun/gmsm** | SM2/SM3/SM4/SM9/ZUC、PKCS#7/#8/#12、smx509、CFCA 互操作、DRBG、TLS 1.3 混合密钥交换 | 生产级，多架构 SIMD（amd64/arm64/riscv64/loong64…），性能对标 Go 标准库 P-256 |
 | Go | Trisia/gotlcp | TLCP 协议栈 | gmsm 作者配套 |
-| Python | gmssl / pyCryptodome 扩展 | 基础算法 | 原型验证为主 |
+| Python | **gmalg**（纯 Python）、gmssl 绑定 | gmalg：SM2/SM3/SM4/SM9/ZUC **含配对与密钥交换**，零依赖，教学/复核/原型首选（本手册复核脚本的第二实现）；gmssl 绑定适合接 C 库 |
 | JavaScript | sm-crypto、jsrsasign-sm、sjcl-sm | SM2/SM3/SM4 | 浏览器端轻量场景 |
 | Rust | smcrypto 等 | 基础算法 | 生态在成长期 |
 
@@ -121,9 +121,64 @@ stream.XORKeyStream(dst, src)
 
 gmsm 的附加能力值得注意：SM9 全套、ZUC-256、PKCS#7/#8/#12 与 smx509（国密证书）、CFCA SADK 互操作、SM2 密钥对保护结构（GB/T 35276）、以及 NIST PQC（ML-KEM/ML-DSA/SLH-DSA）——最后一个预示了"国密 + 后量子"双栈的演进方向。
 
-## 5. 硬件与接口标准
+## 5. Python 与 JavaScript 实战（gmalg / sm-crypto，本手册实测）
 
-### 5.1 设备形态
+两套示例都已在撰写环境实测：输出与本手册第二部分的官方 KAT / 数值示例**逐字节对照通过**。
+
+**Python（gmalg，`pip install gmalg`）**——注意 SM3 是流式接口，SM2 可注入确定性随机数（`rnd_fn`）复现手册 3.4 节的签名：
+
+```python
+import gmalg
+
+# SM3（流式：reset / update / value）
+h = gmalg.SM3(); h.update(b"abc")
+assert h.value().hex() == "66c7f0f4...8e0"          # GB/T 32905 附录 A KAT
+
+# SM4（单分组；另有 ZUC(key, iv) 同风格接口）
+c = gmalg.SM4(bytes.fromhex("0123456789abcdeffedcba9876543210"))
+assert c.encrypt(bytes.fromhex("0123456789abcdeffedcba9876543210")).hex() \
+       == "681edf34d206965e86b3e94f536e4246"
+
+# SM2：私钥导公钥 → 签名（rnd_fn 注入手册 3.4 节的 k，可复现其 r/s）→ 验签
+d_a = 0x3945208F7B2144B13F36E38AC6D3989E4E42A33E18C4A28A9280C43B7D4F23C7
+k   = 0x6CB28D99385C175C75F7C80F08E505B530191B5DCDC80AA5B61CB5A5F9F0A8AD
+s2  = gmalg.SM2(sk=d_a.to_bytes(32, "big"), uid=b"1234567812345678",
+               rnd_fn=lambda n: k)
+pk = s2.generate_pk(d_a.to_bytes(32, "big"))        # = 手册 3.4 节公钥
+r, s = s2.sign(b"message digest")                   # = 手册 3.4 节 (r, s)
+assert s2.verify(b"message digest", r, s)
+```
+
+gmalg 还提供 SM9 全套（签名/加密/KEM/密钥交换，KGC 类）与 `SM9KGC`——本手册 `scripts/verify_sm9_pairing.py` 即用它完成标准附录配对分量的交叉复核。
+
+**JavaScript（sm-crypto，`npm install sm-crypto`）**——三个经典坑在示例中同步标注：
+
+```javascript
+const { sm2, sm3, sm4 } = require('sm-crypto');
+
+// SM3
+sm3('abc');  // "66c7f0f4...8e0"
+
+// SM2：私钥导公钥（椭圆曲线点乘）；签名时必须传 userId 且两端一致（Z 值！）
+const keypair = sm2.generateKeyPairHex();
+const sig = sm2.doSignature('message digest', keypair.privateKey,
+    { hash: true, userId: '1234567812345678' });
+sm2.doVerifySignature('message digest', sig, keypair.publicKey,
+    { userId: '1234567812345678' });
+
+// SM2 加密：cipherMode 1 = C1C3C2（新国标），0 = C1C2C3（旧序）——对接前先对齐
+const ct = sm2.doEncrypt('hello', keypair.publicKey, 1);
+sm2.doDecrypt(ct, keypair.privateKey, 1);
+
+// SM4：默认 ECB + 自动填充，返回 hex 字符串（不是字节数组）
+const key = [0x01,0x23,0x45,0x67,0x89,0xab,0xcd,0xef,
+             0xfe,0xdc,0xba,0x98,0x76,0x54,0x32,0x10];
+sm4.encrypt(key, [/* 明文字节 */]);   // 输出前 16 字节可对照 SM4 KAT
+```
+
+## 6. 硬件与接口标准
+
+### 6.1 设备形态
 
 | 形态 | 定位 | 接口标准 |
 | --- | --- | --- |
@@ -133,7 +188,7 @@ gmsm 的附加能力值得注意：SM9 全套、ZUC-256、PKCS#7/#8/#12 与 smx5
 | USB-Key（智能密码钥匙） | 个人私钥载体 | GM/T 0016（SKF）/ GB/T 35291 |
 | 安全芯片（SE） | 嵌入式根信任 | 芯片级 COS |
 
-### 5.2 SDF 调用骨架（GM/T 0018）
+### 6.2 SDF 调用骨架（GM/T 0018）
 
 ```c
 void *hDevice = NULL, *hSession = NULL;
@@ -155,7 +210,7 @@ SDF_CloseDevice(hDevice);
 
 （函数原型以 GM/T 0018-2012 文本为准；合规要点：**签名/解密私钥留在设备内，应用只拿到结果**——密评对"密钥不出设备"有明确检查项。）
 
-### 5.3 典型部署拓扑
+### 6.3 典型部署拓扑
 
 ```text
 App/浏览器 ──TLCP──► 国密网关（Tengine/Tongsuo nginx，双证书）──► 业务服务
@@ -201,7 +256,7 @@ server {
 
 > 时效注记（2026）：OpenSSL 3.5 系列修复了 **SM2 签名生成路径的时序侧信道（CVE-2026-77696）**——主线密码库也会在国密实现上出侧信道问题，生产版本选型与升级跟踪应把"国密实现的 CVE 历史"纳入视野（参见密码模块章侧信道一节）。
 
-## 6. 性能工程
+## 7. 性能工程
 
 **指令加速现状**（2026 视角，变化很快，落地前实测）：
 
@@ -237,8 +292,16 @@ SM2 的性能要点在第二部分已述（固定基点预计算、双标量乘�
 # OpenSSL（1.1.1+；Tongsuo 同构且另有 TLCP 相关测速目标）
 openssl speed sm3                           # SM3 吞吐
 openssl speed -evp sm4-cbc                  # SM4-CBC（务必走 EVP 路径，才有优化实现）
-openssl speed -evp sm4-gcm                  # 3.0+；新 Intel 平台 + 3.6+ 走 SM4 指令
-openssl speed -multi $(nproc) -evp sm4-gcm  # 多核汇总
+openssl speed -evp sm4-ctr                  # SM4-CTR
+openssl speed -multi $(nproc) -evp sm4-cbc  # 多核汇总
+# 注意（本手册实测）：OpenSSL 3.0 的 `speed -evp sm4-gcm` 无法 fetch
+# （"sm4-gcm : unsupported"）——SM4-GCM 在 3.0 仅存在于 TLS 套件内部，
+# 作为独立 EVP cipher 的测速需更高版本（3.5+）；GCM 吞吐可先按 CTR 读数
+# 估上限（GCM = CTR + GHASH，GHASH 有 CLMUL 时开销约再打七折）
+
+# SM2/ECDSA 签名验签吞吐
+openssl speed sm2            # 3.0+：sign/s 与 verify/s 两列
+openssl speed ecdsap256      # 国际算法对照
 
 # SM2 公钥运算基准（吞吐与延迟分开测）——gmsm 仓库自带基准套件
 git clone https://github.com/emmansun/gmsm && cd gmsm
@@ -254,7 +317,7 @@ go test -bench=. -benchmem ./sm2/... ./sm4/...
 3. 区分"握手密集"（公钥运算为主）与"流量密集"（对称运算为主）负载，分别预算；
 4. 无指令加速平台预留 3~5 倍对称性能缺口，考虑密码卡卸载。
 
-## 7. 迁移策略：从国际算法到国密
+## 8. 迁移策略：从国际算法到国密
 
 ```text
 阶段0 评估：资产盘点（算法使用点：传输/存储/签名/随机数）
@@ -271,7 +334,7 @@ go test -bench=. -benchmem ./sm2/... ./sm4/...
 - **防降级**：双栈并存期间，两个协议栈的会话、缓存、状态严格隔离；网关对"国密客户端被降级到国际套件"要有显式告警；
 - **密钥分级**：主密钥（HSM 内）→ 密钥加密密钥 → 数据密钥的三层结构在国密语境同样是最佳实践，且密评有对应检查。
 
-## 8. 测试与验证
+## 9. 测试与验证
 
 1. **KAT 自测**：每个算法跑标准向量（本手册各章均已给出，配套 `scripts/verify_test_vectors.py` 一键复核 76 项：SM3 两条、HMAC-SM3 三组、SM4 单分组+全轮密钥、CMAC-SM4 子密钥+四组消息、ZUC 两条、EEA3 官方两例、EIA3 示例 1/2、HKDF-SM3 两组、SM2 曲线自检+签名/加密/密钥交换/确定性签名示例、RFC 8998 的 SM4-GCM/CCM 向量、SM9 非配对分量；另有 `scripts/verify_sm9_pairing.py` 复核 SM9 配对驱动分量 11 项——含签名 h 与 KEM/加密 K，实现 SM9 时务必跑）；
 2. **互操作矩阵**：自研实现 × 主流库（GmSSL/Tongsuo/BC/gmsm）两两对跑签名/加密/握手；

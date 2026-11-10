@@ -80,24 +80,42 @@ Certificate:
 
 > 经验：**跨库互操作优先显式传算法，别赌 OID**。SM4 的 OID 按 GM/T 0006 以工作模式区分（104.x 族），忘记模式后缀是常见错误。
 
-## 5. 实战：生成国密证书
+## 5. 实战：生成国密证书与双证书
 
-命令行生成（OpenSSL 1.1.1+/3.x 原生支持 SM2 曲线与 SM3 摘要签名；Tongsuo 另支持 `-sm2` 快捷参数）：
+单张证书生成（OpenSSL 1.1.1+/3.x 原生支持 SM2 曲线与 SM3 摘要签名；Tongsuo 另支持 `-sm2` 快捷参数）：
 
 ```bash
-# 签名密钥对（应生成于密码设备内，此处演示软件密钥）
 openssl ecparam -name SM2 -genkey -noout -out sign.key
-
-# 自签测试证书（生产环境应向持牌 CA 提交 CSR）
 openssl req -x509 -new -key sign.key -SM3 -days 365 \
   -subj "/C=CN/O=Demo/CN=www.example.sm" -out sign.crt
-
-# 查看/校验
-openssl x509 -in sign.crt -noout -text
 openssl verify -CAfile sign.crt sign.crt
 ```
 
-注意：OpenSSL 的 `-SM3` 参数使 req 采用 SM2withSM3 签名；签发双证书时把上面的流程对"加密密钥对"再走一遍（并向 CA/KMC 申请正式加密证书）。CSR（PKCS#10）结构本身无需国密化，只是签名算法换为国密。（本节命令已在 OpenSSL 3.0.x 实测通过：证书签名算法显示 `SM2-with-SM3`、曲线 OID `SM2`、自签校验 OK。）
+**TLCP 双证书自签脚本**（联调自签环境常用；生产环境应向持牌 CA 提交 CSR、加密证书按制度由 KMC 生成下发。以下命令已在 OpenSSL 3.0.x 实测通过：签名算法 `SM2-with-SM3`、Key Usage 正确区分、自签校验 OK）：
+
+```bash
+# ── 签名证书：KeyUsage = digitalSignature + nonRepudiation ──
+openssl ecparam -name SM2 -genkey -noout -out tlcp_sign.key
+openssl req -x509 -new -key tlcp_sign.key -SM3 -days 365 \
+  -subj "/C=CN/O=DemoTLCP/CN=www.example.sm" -out tlcp_sign.crt \
+  -addext "keyUsage=digitalSignature,nonRepudiation" \
+  -addext "basicConstraints=critical,CA:FALSE"
+
+# ── 加密证书：KeyUsage = keyEncipherment + dataEncipherment ──
+openssl ecparam -name SM2 -genkey -noout -out tlcp_enc.key
+openssl req -x509 -new -key tlcp_enc.key -SM3 -days 365 \
+  -subj "/C=CN/O=DemoTLCP/CN=www.example.sm" -out tlcp_enc.crt \
+  -addext "keyUsage=keyEncipherment,dataEncipherment" \
+  -addext "basicConstraints=critical,CA:FALSE"
+
+# ── 核验：两张证书的签名算法/曲线/用途，以及自签有效性 ──
+openssl x509 -in tlcp_sign.crt -noout -text | grep -E "Signature Algorithm|Key Usage" -A1
+openssl x509 -in tlcp_enc.crt  -noout -text | grep -E "Signature Algorithm|Key Usage" -A1
+openssl verify -CAfile tlcp_sign.crt tlcp_sign.crt
+openssl verify -CAfile tlcp_enc.crt  tlcp_enc.crt
+```
+
+要点：**两张证书的 Key Usage 必须按上表区分**（TLCP 网关据此分发两张证书到签名/加密握手消息）；`-addext` 在 OpenSSL 1.1.1+ 可用，老版本需配置文件写扩展；CSR（PKCS#10）结构本身无需国密化，只是签名算法换为国密；Tengine/Tongsuo 部署时这两组 `.crt/.key` 即 `ssl_sign_certificate(_key)` 与 `ssl_enc_certificate(_key)` 的输入（见工程章）。
 
 ## 6. 信任链与证书状态服务
 
